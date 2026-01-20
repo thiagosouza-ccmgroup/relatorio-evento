@@ -10,14 +10,15 @@ from weasyprint import HTML
 import warnings
 import os
 import time
+import shutil
 
-# Tenta importar Selenium (pode falhar se não instalado)
+# Tenta importar Selenium
 try:
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.common.by import By
     from selenium.webdriver.chrome.service import Service
-    from webdriver_manager.chrome import ChromeDriverManager
+    # Removemos o ChromeDriverManager para evitar o conflito de versões
     HAS_SELENIUM = True
 except ImportError:
     HAS_SELENIUM = False
@@ -46,11 +47,11 @@ con_event = ""
 con_year = ""
 
 # ==============================================================================
-# MODO 1: ROBÔ AUTOMÁTICO
+# MODO 1: ROBÔ AUTOMÁTICO (CORRIGIDO)
 # ==============================================================================
 if modo_entrada == "Baixar Automaticamente (Robô)":
     if not HAS_SELENIUM:
-        st.error("⚠️ As bibliotecas do Selenium não estão instaladas neste ambiente.")
+        st.error("⚠️ As bibliotecas do Selenium não estão instaladas. Verifique o requirements.txt.")
     else:
         st.subheader("🤖 Acesso Automático ao Sistema")
         
@@ -70,23 +71,28 @@ if modo_entrada == "Baixar Automaticamente (Robô)":
                 st.warning("Preencha usuário e senha!")
             else:
                 status = st.empty()
-                status.info("⏳ Iniciando navegador invisível...")
+                status.info("⏳ Iniciando navegador (Modo Compatibilidade Linux)...")
                 
                 try:
-                    # Configuração Selenium Headless para Servidor
+                    # --- CORREÇÃO DO ERRO DE VERSÃO ---
                     chrome_options = Options()
                     chrome_options.add_argument("--headless")
                     chrome_options.add_argument("--no-sandbox")
                     chrome_options.add_argument("--disable-dev-shm-usage")
                     chrome_options.add_argument("--disable-gpu")
                     
-                    # Define pasta de download temporária
+                    # Força o caminho do binário do Chromium no Linux
+                    chrome_options.binary_location = "/usr/bin/chromium"
+                    
+                    # Define pasta de download
                     download_dir = os.getcwd()
                     prefs = {"download.default_directory": download_dir}
                     chrome_options.add_experimental_option("prefs", prefs)
                     
-                    # Instala Driver
-                    service = Service(ChromeDriverManager().install())
+                    # Usa o Driver do Sistema (instalado pelo packages.txt)
+                    # Isso evita o erro de versão 114 vs 144
+                    service = Service("/usr/bin/chromedriver")
+                    
                     driver = webdriver.Chrome(service=service, options=chrome_options)
                     
                     # 1. Login
@@ -94,6 +100,7 @@ if modo_entrada == "Baixar Automaticamente (Robô)":
                     url_login = f"https://{subdominio}.iweventos.com.br/sistema/not/acesso/login"
                     driver.get(url_login)
                     
+                    # Tenta logar (compatível com ID ou Name)
                     try:
                         driver.find_element(By.NAME, "login").send_keys(usuario)
                     except:
@@ -126,6 +133,7 @@ if modo_entrada == "Baixar Automaticamente (Robô)":
                     ]
                     for classe in agrupadores:
                         try:
+                            # Javascript é mais seguro para checkboxes escondidos ou estilizados
                             driver.execute_script(f"if(document.getElementsByClassName('{classe}')[0]) document.getElementsByClassName('{classe}')[0].click();")
                         except: pass
                         
@@ -133,23 +141,29 @@ if modo_entrada == "Baixar Automaticamente (Robô)":
                     status.info("⬇️ Gerando Excel...")
                     driver.execute_script("document.getElementById('btGerar').click();")
                     
-                    # Espera download
+                    # Espera download (Loop inteligente)
                     arquivo_baixado = None
-                    for i in range(60):
+                    tempo_espera = 0
+                    while tempo_espera < 60:
                         time.sleep(1)
+                        tempo_espera += 1
+                        
+                        # Procura arquivos xlsx ou csv recentes
                         files = [f for f in os.listdir(download_dir) if f.endswith(('.xlsx', '.xls', '.csv'))]
-                        # Pega o mais recente
                         if files:
+                            # Ordena por data de modificação
                             files.sort(key=lambda x: os.path.getmtime(os.path.join(download_dir, x)), reverse=True)
-                            arquivo_baixado = os.path.join(download_dir, files[0])
-                            # Verifica se terminou de baixar (não é .crdownload)
-                            if not arquivo_baixado.endswith('.crdownload'):
+                            candidato = os.path.join(download_dir, files[0])
+                            
+                            # Verifica se não é arquivo temporário do navegador (.crdownload)
+                            if not candidato.endswith('.crdownload'):
+                                arquivo_baixado = candidato
                                 break
                                 
                     driver.quit()
                     
                     if arquivo_baixado:
-                        status.success(f"✅ Download concluído: {os.path.basename(arquivo_baixado)}")
+                        status.success(f"✅ Download concluído!")
                         # Lê o arquivo para memória
                         if arquivo_baixado.endswith('.csv'):
                             try:
@@ -160,11 +174,13 @@ if modo_entrada == "Baixar Automaticamente (Robô)":
                         else:
                             df_final = pd.read_excel(arquivo_baixado)
                             
-                        # Limpa arquivo temporário
-                        os.remove(arquivo_baixado)
+                        # Limpeza: remove o arquivo do servidor para não acumular
+                        try:
+                            os.remove(arquivo_baixado)
+                        except: pass
                         
                     else:
-                        st.error("O download não iniciou a tempo.")
+                        st.error("O download não iniciou a tempo ou falhou.")
                         
                 except Exception as e:
                     st.error(f"Erro no Robô: {e}")
@@ -423,8 +439,7 @@ if df_final is not None:
         pdf_file = BytesIO()
         HTML(string=html).write_pdf(pdf_file)
         
-        st.balloons()
-        st.success(f"✅ Relatório do evento **{con_event}** gerado!")
+        st.success("✅ Relatório Gerado com Sucesso!")
         st.download_button(
             label="⬇️ BAIXAR PDF",
             data=pdf_file.getvalue(),
@@ -433,4 +448,4 @@ if df_final is not None:
         )
         
     except Exception as e:
-        st.error(f"Erro ao processar: {e}")
+        st.error(f"Erro ao processar arquivo: {e}")
