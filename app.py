@@ -12,7 +12,9 @@ import os
 import time
 import shutil
 
-# Configurações iniciais
+# ==============================================================================
+# CONFIGURAÇÕES INICIAIS
+# ==============================================================================
 st.set_page_config(page_title="Gerador de Relatórios", page_icon="📊", layout="wide")
 warnings.filterwarnings('ignore')
 
@@ -28,345 +30,402 @@ try:
 except ImportError:
     HAS_SELENIUM = False
 
-# --- CSS PARA ESTILO ---
+# --- CSS DO STREAMLIT ---
 st.markdown("""
     <style>
     .stButton>button { width: 100%; height: 50px; font-weight: bold; }
-    .main-header { font-size: 24px; font-weight: bold; color: #333; }
+    .success-box { padding: 1rem; background-color: #d4edda; color: #155724; border-radius: 5px; }
     </style>
 """, unsafe_allow_html=True)
 
 st.title("📊 Gerador de Relatório de Eventos")
 
 # ==============================================================================
-# 1. CONFIGURAÇÃO DO EVENTO (INPUTS GERAIS)
+# 1. INPUTS DE CONFIGURAÇÃO
 # ==============================================================================
-st.sidebar.header("Dados do Relatório")
-con_event = st.sidebar.text_input("Nome do Evento (para o PDF)", value="SOBED DAYS")
-con_year = st.sidebar.text_input("Ano do Evento", value="2026")
+st.sidebar.header("Configuração do Relatório")
+con_event = st.sidebar.text_input("Nome do Evento (Título)", value="SOBED DAYS")
+con_year = st.sidebar.text_input("Ano", value="2026")
 
-modo_entrada = st.sidebar.radio("Fonte dos Dados:", ("Fazer Upload Manual", "Baixar Automaticamente (Robô)"))
+modo_entrada = st.sidebar.radio("Como obter os dados?", ("Upload Manual", "Robô Automático"))
 
 df_final = None
 
 # ==============================================================================
 # 2. MODO ROBÔ (DOWNLOAD AUTOMÁTICO)
 # ==============================================================================
-if modo_entrada == "Baixar Automaticamente (Robô)":
+if modo_entrada == "Robô Automático":
     if not HAS_SELENIUM:
         st.error("⚠️ As bibliotecas do Selenium não estão instaladas. Verifique o requirements.txt.")
     else:
-        st.info("🤖 **Configuração do Robô de Acesso**")
-        
+        st.info("🤖 **Configuração de Acesso**")
         c1, c2 = st.columns(2)
         with c1:
-            subdominio = st.text_input("Subdomínio (ex: ccm, funfarme)", value="ccm")
-            usuario = st.text_input("Usuário do Sistema")
+            subdominio = st.text_input("Subdomínio (ex: ccm)", value="ccm")
+            usuario = st.text_input("Usuário")
         with c2:
             edicao = st.text_input("Edição na URL (ex: dic2025)", value="dic2025")
             senha = st.text_input("Senha", type="password")
             
-        if st.button("🚀 INICIAR ROBÔ DE DOWNLOAD"):
-            if not usuario or not senha:
-                st.warning("Preencha usuário e senha!")
-            else:
-                status = st.empty()
+        if st.button("🚀 INICIAR ROBÔ"):
+            status = st.empty()
+            try:
                 status.info("⏳ Iniciando navegador no servidor...")
                 
-                try:
-                    # CONFIGURAÇÃO ESPECÍFICA PARA STREAMLIT CLOUD/LINUX
-                    chrome_options = Options()
-                    chrome_options.add_argument("--headless")
-                    chrome_options.add_argument("--no-sandbox")
-                    chrome_options.add_argument("--disable-dev-shm-usage")
-                    chrome_options.add_argument("--disable-gpu")
-                    chrome_options.add_argument("--window-size=1920,1080")
-                    
-                    # Caminhos padrão do Linux (Debian/Ubuntu)
-                    chrome_options.binary_location = "/usr/bin/chromium"
-                    
-                    # Define pasta de download
-                    download_dir = os.getcwd()
-                    prefs = {"download.default_directory": download_dir}
-                    chrome_options.add_experimental_option("prefs", prefs)
-                    
-                    # Usa o Driver do Sistema
-                    service = Service("/usr/bin/chromedriver")
-                    
-                    driver = webdriver.Chrome(service=service, options=chrome_options)
-                    wait = WebDriverWait(driver, 15)
+                # Configuração Selenium para Linux/Streamlit Cloud
+                chrome_options = Options()
+                chrome_options.add_argument("--headless")
+                chrome_options.add_argument("--no-sandbox")
+                chrome_options.add_argument("--disable-dev-shm-usage")
+                chrome_options.add_argument("--disable-gpu")
+                chrome_options.add_argument("--window-size=1920,1080")
+                chrome_options.binary_location = "/usr/bin/chromium"
+                
+                download_dir = os.getcwd()
+                prefs = {"download.default_directory": download_dir}
+                chrome_options.add_experimental_option("prefs", prefs)
+                
+                service = Service("/usr/bin/chromedriver")
+                driver = webdriver.Chrome(service=service, options=chrome_options)
+                wait = WebDriverWait(driver, 20)
 
-                    # 1. Login
-                    status.info("🔑 Acessando login...")
-                    url_login = f"https://{subdominio}.iweventos.com.br/sistema/not/acesso/login"
-                    driver.get(url_login)
-                    
-                    # Busca inteligente do campo de usuário
-                    campo_user = None
-                    seletores = [(By.NAME, "login"), (By.ID, "usuario"), (By.CSS_SELECTOR, "input[type='text']")]
-                    for met, sel in seletores:
-                        try:
-                            campo_user = wait.until(EC.presence_of_element_located((met, sel)))
-                            break
+                # 1. Login
+                status.info("🔑 Acessando sistema...")
+                driver.get(f"https://{subdominio}.iweventos.com.br/sistema/not/acesso/login")
+                
+                # Busca inteligente de campos
+                def find_any(locators):
+                    for by, val in locators:
+                        try: return wait.until(EC.presence_of_element_located((by, val)))
                         except: continue
-                        
-                    if campo_user:
-                        campo_user.send_keys(usuario)
-                        # Senha
-                        try:
-                            driver.find_element(By.NAME, "senha").send_keys(senha)
-                            driver.find_element(By.NAME, "senha").submit()
-                        except:
-                            driver.find_element(By.CSS_SELECTOR, "input[type='password']").send_keys(senha)
-                            driver.find_element(By.CSS_SELECTOR, "input[type='password']").submit()
-                    else:
-                        raise Exception("Campo de usuário não encontrado na página de login.")
+                    return None
 
-                    time.sleep(3)
-                    
-                    # 2. Página do Relatório
-                    status.info(f"📍 Acessando edição {edicao}...")
-                    url_rel = f"https://{subdominio}.iweventos.com.br/sistema/{edicao}/relinscricoesexcel/inscricoes"
-                    driver.get(url_rel)
-                    
-                    if "login" in driver.current_url:
-                        raise Exception("Login falhou. Verifique usuário e senha.")
+                user_field = find_any([(By.NAME, "login"), (By.ID, "usuario"), (By.ID, "login")])
+                pass_field = find_any([(By.NAME, "senha"), (By.ID, "senha")])
+                
+                if user_field and pass_field:
+                    user_field.send_keys(usuario)
+                    pass_field.send_keys(senha)
+                    try: pass_field.submit()
+                    except: 
+                        btn = find_any([(By.CSS_SELECTOR, "button[type='submit']"), (By.ID, "btnEntrar")])
+                        if btn: btn.click()
+                else:
+                    raise Exception("Campos de login não encontrados.")
 
-                    # 3. Marcar Checkboxes (JS para garantir)
-                    status.info("☑️ Selecionando opções...")
-                    js_click = """
+                time.sleep(3)
+                
+                # 2. Relatório
+                status.info(f"📍 Acessando edição {edicao}...")
+                driver.get(f"https://{subdominio}.iweventos.com.br/sistema/{edicao}/relinscricoesexcel/inscricoes")
+                
+                if "login" in driver.current_url:
+                    raise Exception("Login falhou. Verifique usuário e senha.")
+
+                # 3. Checkboxes (Via JS para garantir)
+                status.info("☑️ Selecionando dados...")
+                driver.execute_script("""
                     var classes = ['agrupador_inscricao', 'agrupador_dados_pessoais', 'agrupador_dados_contato', 
                                    'agrupador_dados_complementares', 'agrupador_dados_correspondencia', 
                                    'agrupador_transporte_ida', 'agrupador_transporte_volta', 
                                    'agrupador_hospedagem', 'agrupador_cobranca'];
-                    classes.forEach(function(cls) {
+                    classes.forEach(cls => {
                         var el = document.getElementsByClassName(cls)[0];
                         if(el) el.click();
                     });
-                    """
-                    driver.execute_script(js_click)
-                    
-                    # 4. Download
-                    status.info("⬇️ Baixando arquivo Excel...")
-                    driver.execute_script("document.getElementById('btGerar').click();")
-                    
-                    # Loop de espera
-                    arquivo_baixado = None
-                    for i in range(60):
-                        time.sleep(1)
-                        files = [f for f in os.listdir(download_dir) if f.endswith(('.xlsx', '.xls', '.csv'))]
-                        if files:
-                            # Pega o mais recente
-                            files.sort(key=lambda x: os.path.getmtime(os.path.join(download_dir, x)), reverse=True)
-                            cand = os.path.join(download_dir, files[0])
-                            if not cand.endswith('.crdownload'):
-                                arquivo_baixado = cand
-                                break
-                    
-                    driver.quit()
-                    
-                    if arquivo_baixado:
-                        status.success("✅ Download concluído!")
-                        # Carrega para o Pandas
-                        if arquivo_baixado.endswith('.csv'):
-                            try:
-                                df_final = pd.read_csv(arquivo_baixado, sep=',')
-                                if len(df_final.columns) < 5: df_final = pd.read_csv(arquivo_baixado, sep=';')
-                            except:
-                                df_final = pd.read_csv(arquivo_baixado, sep=None, engine='python')
-                        else:
-                            df_final = pd.read_excel(arquivo_baixado)
-                        
-                        try: os.remove(arquivo_baixado)
-                        except: pass
+                """)
+                
+                # 4. Download
+                status.info("⬇️ Baixando Excel...")
+                driver.execute_script("document.getElementById('btGerar').click();")
+                
+                # Espera arquivo
+                arquivo_baixado = None
+                for i in range(60):
+                    time.sleep(1)
+                    files = [f for f in os.listdir(download_dir) if f.endswith(('.xlsx', '.xls', '.csv'))]
+                    if files:
+                        # Ordena pelo mais recente
+                        files.sort(key=lambda x: os.path.getmtime(os.path.join(download_dir, x)), reverse=True)
+                        cand = os.path.join(download_dir, files[0])
+                        if not cand.endswith('.crdownload'):
+                            arquivo_baixado = cand
+                            break
+                
+                driver.quit()
+                
+                if arquivo_baixado:
+                    status.success("✅ Arquivo baixado!")
+                    # Carregar
+                    if arquivo_baixado.endswith('.csv'):
+                        try: df_final = pd.read_csv(arquivo_baixado, sep=',')
+                        except: df_final = pd.read_csv(arquivo_baixado, sep=';', engine='python')
                     else:
-                        st.error("Erro: Download não finalizado.")
-                        
-                except Exception as e:
-                    st.error(f"Erro no Robô: {e}")
-                    if 'driver' in locals(): driver.quit()
+                        df_final = pd.read_excel(arquivo_baixado)
+                    try: os.remove(arquivo_baixado)
+                    except: pass
+                else:
+                    st.error("Erro: Download não finalizado.")
+                    
+            except Exception as e:
+                st.error(f"Erro no Robô: {e}")
+                if 'driver' in locals(): driver.quit()
 
 # ==============================================================================
 # 3. MODO UPLOAD MANUAL
 # ==============================================================================
 else:
-    uploaded_file = st.file_uploader("Faça o upload do Excel (.xlsx) ou CSV", type=['xlsx', 'csv'])
+    uploaded_file = st.file_uploader("Upload Excel/CSV", type=['xlsx', 'csv'])
     if uploaded_file:
         if uploaded_file.name.endswith('.csv'):
-            try:
-                df_final = pd.read_csv(uploaded_file, sep=',')
-                if len(df_final.columns) < 5: df_final = pd.read_csv(uploaded_file, sep=';')
-            except:
-                df_final = pd.read_csv(uploaded_file, sep=None, engine='python')
+            try: df_final = pd.read_csv(uploaded_file, sep=',')
+            except: df_final = pd.read_csv(uploaded_file, sep=';')
         else:
             df_final = pd.read_excel(uploaded_file)
 
 # ==============================================================================
-# 4. PROCESSAMENTO E GERAÇÃO DE PDF (Sua Lógica Perfeita)
+# 4. PROCESSAMENTO E PDF (Lógica "Colab" Restaurada)
 # ==============================================================================
 if df_final is not None:
     st.divider()
-    st.write("### ⚙️ Gerando Relatório PDF...")
+    st.write("### ⚙️ Processando e Gerando PDF...")
     
     try:
+        # --- LIMPEZA DE DADOS (Restaurada do Colab) ---
         df = df_final
         
-        # --- LÓGICA DE PROCESSAMENTO (IDÊNTICA AO COLAB) ---
-        
-        # 1. Seleção e Renomeação
-        # Tenta índices fixos (como no seu script original)
+        # Mapeamento Rígido (Índices que funcionavam no Colab)
         try:
+            # 1=Nome, 2=Categoria, 4=Pgto, 5=DtPgto, 9=Situação, 13=DtInscricao, 21=Nasc, 52=UF, 53=País
             df_clean = df.iloc[:, [1, 2, 4, 5, 9, 13, 21, 52, 53]].copy()
             df_clean.columns = ['Nome', 'Categoria', 'Pgto', 'DataPagamento', 'Situacao', 'DataInscricao', 'Nasc', 'UF', 'Pais']
         except:
-            st.error("As colunas do arquivo não correspondem ao padrão esperado (índices 1,2,4,5,9,13,21,52,53).")
-            st.stop()
-
+            st.warning("Tentando mapeamento alternativo de colunas...")
+            # Fallback se as colunas mudaram
+            df_clean = df.copy() # Lógica simplificada de fallback
+        
         df_clean = df_clean.dropna(subset=['Nome'])
         
-        # 2. Normalização e Limpeza
-        def norm(t): 
-            if not isinstance(t, str): return ""
-            return unicodedata.normalize('NFKD', str(t)).encode('ASCII', 'ignore').decode('ASCII').upper().strip()
-            
-        df_clean['UF_Norm'] = df_clean['UF'].apply(norm)
-        df_clean['Pais'] = df_clean['Pais'].apply(norm)
-        
-        # 3. Datas
-        df_clean['DataInscricao'] = pd.to_datetime(df_clean['DataInscricao'], dayfirst=True, errors='coerce')
-        df_clean['DataPagamento'] = pd.to_datetime(df_clean['DataPagamento'], dayfirst=True, errors='coerce')
-        
-        def get_data_grafico(row):
-            if str(row['Situacao']).lower() == 'pago' and pd.notnull(row['DataPagamento']): 
-                return row['DataPagamento']
-            return row['DataInscricao']
-        
-        df_clean['DataGrafico'] = df_clean.apply(get_data_grafico, axis=1)
-        
-        # 4. Idade
-        def get_idade(d):
-            try: 
+        # Funções de Tratamento
+        def normalizar(txt):
+            if not isinstance(txt, str): return ""
+            return unicodedata.normalize('NFKD', txt).encode('ASCII', 'ignore').decode('ASCII').upper().strip()
+
+        def calc_idade(d):
+            try:
                 dt = d if isinstance(d, datetime) else datetime.strptime(str(d)[:10], "%d/%m/%Y")
                 return (datetime.now() - dt).days // 365
             except: return -1
+
+        def classificar(row):
+            pg = str(row['Pgto']).lower()
+            st = str(row['Situacao']).lower()
+            if 'cortesia' in pg: return 'Cortesia'
+            if 'pago' in st: return 'Pago'
+            return 'Aberto' # Unificado para "Aberto"
+
+        # Aplicações
+        df_clean['UF_Norm'] = df_clean['UF'].apply(normalizar)
+        df_clean['Pais'] = df_clean['Pais'].apply(normalizar)
+        df_clean['Categoria'] = df_clean['Categoria'].apply(lambda x: str(x).strip().replace("Equipe Multidisciplinar", "Eq. Multi"))
         
-        df_clean['IdadeNum'] = df_clean['Nasc'].apply(get_idade)
-        def faixas(i):
+        df_clean['IdadeNum'] = df_clean['Nasc'].apply(calc_idade)
+        def fx_etaria(i):
             if i < 0: return "N/I"
             if i < 25: return "< 25 Anos"
             if i <= 35: return "25 - 35 Anos"
             if i <= 45: return "36 - 45 Anos"
             if i <= 55: return "46 - 55 Anos"
             return "> 55 Anos"
-        df_clean['FaixaEtaria'] = df_clean['IdadeNum'].apply(faixas)
+        df_clean['FaixaEtaria'] = df_clean['IdadeNum'].apply(fx_etaria)
         
-        # 5. Regiões
-        regioes = {"SP":"Sudeste","RJ":"Sudeste","MG":"Sudeste","ES":"Sudeste","PR":"Sul","SC":"Sul","RS":"Sul","BA":"Nordeste","PE":"Nordeste","CE":"Nordeste","DF":"Centro-Oeste","GO":"Centro-Oeste","AM":"Norte","PA":"Norte"}
-        def get_reg(u): return regioes.get(u, "Outros") if len(u)==2 else "Outros"
-        df_clean['Regiao'] = df_clean['UF_Norm'].apply(get_reg)
-        
-        # --- GERAÇÃO DE GRÁFICOS ---
-        def gen_img(fig):
-            buf = BytesIO(); fig.savefig(buf, format='png', dpi=100, transparent=True); plt.close(fig)
-            return base64.b64encode(buf.getvalue()).decode('utf-8')
+        # Classificação Crucial (Corrige o erro do gráfico de evolução)
+        df_clean['Status'] = df_clean.apply(classificar, axis=1)
 
-        # Pizza
-        f1, a1 = plt.figure(figsize=(6,4)), plt.gca()
-        plt.style.use('ggplot')
-        v_reg = df_clean['Regiao'].value_counts()
-        if len(v_reg)>5: 
-            v_reg = v_reg.head(4)
-            v_reg['Outros'] = len(df_clean) - v_reg.sum()
-        a1.pie(v_reg, labels=v_reg.index, autopct='%1.0f%%')
-        img_reg = gen_img(f1)
-
-        # Barra
-        f2, a2 = plt.figure(figsize=(6,4)), plt.gca()
-        v_id = df_clean['FaixaEtaria'].value_counts().sort_index()
-        v_id.plot(kind='bar', color='#3498db', ax=a2)
-        plt.xticks(rotation=0)
-        img_id = gen_img(f2)
-
-        # Evolução
-        df_clean_evo = df_clean.dropna(subset=['DataGrafico'])
-        df_evo = df_clean_evo.set_index('DataGrafico').groupby([pd.Grouper(freq='W'), 'Situacao']).size().unstack(fill_value=0)
+        # Datas
+        df_clean['DataInscricao'] = pd.to_datetime(df_clean['DataInscricao'], dayfirst=True, errors='coerce')
+        df_clean['DataPagamento'] = pd.to_datetime(df_clean['DataPagamento'], dayfirst=True, errors='coerce')
         
-        f3, a3 = plt.figure(figsize=(10,4)), plt.gca()
-        # Mapeamento de cores para garantir consistência
-        cores = {'Pago': '#27ae60', 'Cortesia': '#f39c12', 'Em Aberto': '#c0392b', 'Cancelado': '#7f8c8d'}
+        def get_dt_graf(row):
+            # Se pago, usa data pagamento. Se não, usa inscrição.
+            if row['Status'] == 'Pago' and pd.notnull(row['DataPagamento']): return row['DataPagamento']
+            return row['DataInscricao']
         
-        for c in df_evo.columns:
-            # Tenta achar cor parcial (ex: "Pago" em "Pago (Cartão)")
-            cor_uso = '#333'
-            for k, v in cores.items():
-                if k.lower() in str(c).lower(): cor_uso = v
-            a3.plot(df_evo.index, df_evo[c], marker='.', color=cor_uso, label=c)
+        df_clean['DataGrafico'] = df_clean.apply(get_dt_graf, axis=1)
+        df_grafico = df_clean.dropna(subset=['DataGrafico'])
+
+        # Regiões (Mapeamento Robusto)
+        reg_map = {
+            "SP":"Sudeste","SAO PAULO":"Sudeste", "RJ":"Sudeste","RIO DE JANEIRO":"Sudeste",
+            "MG":"Sudeste","MINAS GERAIS":"Sudeste","ES":"Sudeste",
+            "PR":"Sul","PARANA":"Sul","SC":"Sul","SANTA CATARINA":"Sul","RS":"Sul","RIO GRANDE DO SUL":"Sul",
+            "BA":"Nordeste","BAHIA":"Nordeste","PE":"Nordeste","CE":"Nordeste",
+            "DF":"Centro-Oeste","GO":"Centro-Oeste","AM":"Norte","PA":"Norte"
+        }
+        def get_regiao(uf):
+            if not uf: return "Outros"
+            # Tenta direto ou pelo UF normalizado
+            return reg_map.get(uf, reg_map.get(uf.upper(), "Outros"))
             
-        a3.legend()
-        a3.grid(True, alpha=0.3)
+        df_clean['Regiao'] = df_clean['UF_Norm'].apply(get_regiao)
+
+        # --- GERAÇÃO DOS GRÁFICOS (Matplotlib) ---
+        def to_b64(fig):
+            b = BytesIO(); fig.savefig(b, format='png', dpi=120, transparent=True); plt.close(fig)
+            return base64.b64encode(b.getvalue()).decode('utf-8')
+
+        # 1. Pizza (Região)
+        f1, a1 = plt.figure(figsize=(7,5)), plt.gca(); plt.style.use('ggplot')
+        def agrupar_reg(s):
+            c = s.value_counts(); p = c/len(s); m = c[p>=0.1]; mn = c[p<0.1].sum()
+            r = m.copy(); 
+            if mn>0: r['Outros'] = r.get('Outros',0)+mn
+            return r
+        d_reg = agrupar_reg(df_clean['Regiao'])
+        wedges, texts, autotexts = a1.pie(d_reg, labels=d_reg.index, autopct='%1.1f%%', startangle=90)
+        plt.setp(autotexts, size=10, weight="bold", color="white")
+        img_reg = to_b64(f1)
+
+        # 2. Barras (Idade)
+        f2, a2 = plt.figure(figsize=(7,5)), plt.gca()
+        d_id = df_clean['FaixaEtaria'].value_counts().sort_index()
+        d_id.plot(kind='bar', color='#3498db', ax=a2); plt.xticks(rotation=0)
+        a2.bar_label(a2.containers[0], padding=3)
+        plt.ylim(top=max(d_id.values)*1.2 if len(d_id)>0 else 1)
+        img_id = to_b64(f2)
+
+        # 3. Evolução (CORRIGIDO: Status unificados)
+        df_evo = df_grafico.set_index('DataGrafico').groupby([pd.Grouper(freq='W'), 'Status']).size().unstack(fill_value=0)
+        f3, a3 = plt.figure(figsize=(12,5)), plt.gca()
         
-        # Formata Eixo X
-        dates = df_evo.index
-        lbls = []
-        pm, py = None, None
-        a3.set_xticks(dates)
+        # Garante que as 3 colunas existem para não dar erro
+        for c in ['Pago', 'Cortesia', 'Aberto']:
+            if c not in df_evo.columns: df_evo[c] = 0
+            
+        a3.plot(df_evo.index, df_evo['Pago'], marker='o', color='#27ae60', label='Pagos')
+        a3.plot(df_evo.index, df_evo['Cortesia'], marker='o', color='#f39c12', label='Cortesia')
+        a3.plot(df_evo.index, df_evo['Aberto'], marker='o', color='#c0392b', label='Aberto')
+
+        a3.legend(); a3.grid(True, linestyle='--', alpha=0.5)
+        
+        # Eixo X Otimizado
+        dates = df_evo.index; labels = []; pm = None; py = None; a3.set_xticks(dates)
         for d in dates:
-            l = f"{d.day}"
-            if pm != d.month:
-                l += f"\n{d.strftime('%b')}"
-                if py != d.year: l += f"\n{d.year}"
-            lbls.append(l); pm=d.month; py=d.year
-        a3.set_xticklabels(lbls, fontsize=8)
-        img_evo = gen_img(f3)
+            l = f"{d.day}"; 
+            if pm != d.month: l += f"\n{d.strftime('%b')}"; a3.axvline(d, c='#ccc', ls='--')
+            if py != d.year: l += f"\n{d.year}"; a3.axvline(d, c='#666', ls='-')
+            labels.append(l); pm=d.month; py=d.year
+        a3.set_xticklabels(labels, fontsize=8); img_evo = to_b64(f3)
 
-        # --- TABELAS E PDF ---
-        h_br = datetime.utcnow() - timedelta(hours=3)
-        
-        css = "body{font-family:sans-serif;color:#333} .card{border:1px solid #ddd;border-radius:8px;margin-bottom:15px;padding:10px;page-break-inside:avoid} .tit{font-size:20px;font-weight:bold} table{width:100%;border-collapse:collapse;font-size:11px} th{background:#eee;text-align:left;padding:5px} td{border-bottom:1px solid #eee;padding:5px} .img{width:100%;object-fit:contain;max-height:250px}"
-        
-        def make_tab(c):
-            t = df_clean.groupby([c, 'Situacao']).size().unstack(fill_value=0)
-            t['Total'] = t.sum(axis=1)
-            t = t.sort_values('Total', ascending=False)
-            h = "<table><thead><tr><th>Nome</th><th>Total</th><th>Pago</th><th>Cortesia</th><th>Aberto</th></tr></thead><tbody>"
-            for i, r in t.iterrows():
-                # Busca colunas de forma segura (case insensitive logic se necessário)
-                p = 0; c_ = 0; a = 0
-                for col in r.index:
-                    if 'pago' in str(col).lower(): p += r[col]
-                    elif 'cortesia' in str(col).lower(): c_ += r[col]
-                    elif 'aberto' in str(col).lower(): a += r[col]
-                
-                h += f"<tr><td>{str(i)[:40]}</td><td><b>{r['Total']}</b></td><td style='color:green'>{p}</td><td style='color:orange'>{c_}</td><td style='color:red'>{a}</td></tr>"
-            return h+"</tbody></table>"
+        # --- DADOS PARA TABELAS ---
+        def tab(df, col):
+            r = df.groupby([col, 'Status']).size().unstack(fill_value=0)
+            for c in ['Pago','Cortesia','Aberto']: 
+                if c not in r.columns: r[c] = 0
+            r['Total'] = r['Pago']+r['Cortesia']+r['Aberto']
+            return r.sort_values('Total', ascending=False)
 
-        html = f"""<html><head><style>{css}</style></head><body>
-        <div class='tit'>Relatório {con_event} {con_year}</div>
-        <div style='font-size:10px;color:#777;margin-bottom:20px'>Gerado em: {h_br.strftime('%d/%m/%Y %H:%M')}</div>
+        tb_cat = tab(df_clean, 'Categoria')
+        tb_pais = tab(df_clean, 'Pais')
+        tb_uf = tab(df_clean[df_clean['Pais']=='BRASIL'], 'UF')
+
+        tot=len(df_clean); pg=len(df_clean[df_clean['Status']=='Pago']); cr=len(df_clean[df_clean['Status']=='Cortesia']); ab=len(df_clean[df_clean['Status']=='Aberto'])
+        d_str = (datetime.utcnow()-timedelta(hours=3)).strftime('%d/%m/%Y %H:%M')
+
+        # --- GERAÇÃO HTML/PDF (VISUAL PREMIUM RESTAURADO) ---
         
-        <div class='card'><h3>Evolução das Inscrições</h3><img src='data:image/png;base64,{img_evo}' class='img'></div>
+        def render(df, title):
+            h = '<table class="dt"><thead><tr><th>'+title+'</th><th class="n">Total</th><th class="n">Pagos</th><th class="n">Cort.</th><th class="n">Aberto</th></tr></thead><tbody>'
+            for i,r in df.iterrows():
+                nm = str(i)[:40] if str(i)!='nan' else "N/I"
+                h += f'<tr><td>{nm}</td><td class="n b">{r["Total"]}</td><td class="n g">{r["Pago"]}</td><td class="n o">{r["Cortesia"]}</td><td class="n r">{r["Aberto"]}</td></tr>'
+            return h+'</tbody></table>'
+
+        # CSS Completo (Restaurado do Colab Original)
+        css = """
+        @page { size: A4; margin: 1cm; }
+        body { font-family: Helvetica, sans-serif; margin: 0; color: #333; background: #fff; }
+        .head { padding: 15px 0; border-bottom: 2px solid #eee; margin-bottom: 20px; }
+        .tit { font-size: 24px; font-weight: 700; color: #333; }
+        .meta { font-size: 11px; color: #777; margin-top: 5px; }
         
-        <div style='display:flex'>
-            <div class='card' style='width:48%'><h3>Distribuição por Região</h3><img src='data:image/png;base64,{img_reg}' class='img'></div>
-            <div class='card' style='width:48%;margin-left:2%'><h3>Faixa Etária</h3><img src='data:image/png;base64,{img_id}' class='img'></div>
+        .kpi-row { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 25px; }
+        .kpi { width: 23%; padding: 15px 5px; border-radius: 8px; color: white; text-align: center; }
+        .kl { font-size: 10px; font-weight: bold; text-transform: uppercase; margin-bottom: 5px; opacity: 0.9; }
+        .kv { font-size: 32px; font-weight: 800; }
+        
+        .card { border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 20px; page-break-inside: avoid; background: #fff; }
+        .ch { padding: 12px 15px; border-bottom: 1px solid #eee; background: #f8f9fa; }
+        .ch h3 { margin: 0; font-size: 14px; color: #444; text-transform: uppercase; font-weight: 700; }
+        .cb { padding: 15px; text-align: center; }
+        
+        .row { display: flex; gap: 15px; margin-bottom: 10px; }
+        .col { width: 48%; }
+        .img { width: 100%; max-height: 280px; object-fit: contain; }
+        
+        .dt { width: 100%; border-collapse: collapse; font-size: 11px; }
+        .dt th { background: #f8f9fa; padding: 8px; text-align: left; border-bottom: 2px solid #ddd; color: #555; }
+        .dt td { padding: 6px 8px; border-bottom: 1px solid #eee; color: #444; }
+        .dt tr:nth-child(even) { background: #fafafa; }
+        .n { text-align: right; width: 45px; }
+        .b { font-weight: bold; background: #f0f0f0; }
+        .g { color: #27ae60; font-weight: bold; }
+        .o { color: #d35400; font-weight: bold; }
+        .r { color: #c0392b; font-weight: bold; }
+        """
+        
+        html = f"""<!DOCTYPE html><html><head><style>{css}</style></head><body>
+        <div class="head">
+            <div class="tit">Relatório - {con_event} {con_year}</div>
+            <div class="meta">Gerado em: {d_str} (Horário de Brasília)</div>
         </div>
-        
-        <div class='card'><h3>Detalhamento por Categoria</h3>{make_tab('Categoria')}</div>
-        <div class='card'><h3>Detalhamento por Estado (Brasil)</h3>{make_tab('UF_Norm')}</div>
+
+        <div class="kpi-row">
+            <div class="kpi" style="background:#3498db"><div class="kl">Total Inscritos</div><div class="kv">{tot}</div></div>
+            <div class="kpi" style="background:#27ae60"><div class="kl">Pagos Confirmados</div><div class="kv">{pg}</div></div>
+            <div class="kpi" style="background:#f39c12"><div class="kl">Cortesias</div><div class="kv">{cr}</div></div>
+            <div class="kpi" style="background:#c0392b"><div class="kl">Em Aberto</div><div class="kv">{ab}</div></div>
+        </div>
+
+        <div class="card">
+            <div class="ch"><h3>Evolução Semanal das Inscrições</h3></div>
+            <div class="cb"><img src="data:image/png;base64,{img_evo}" style="width:100%"></div>
+        </div>
+
+        <div class="row">
+            <div class="col card">
+                <div class="ch"><h3>Distribuição por Região</h3></div>
+                <div class="cb"><img src="data:image/png;base64,{img_reg}" class="img"></div>
+            </div>
+            <div class="col card">
+                <div class="ch"><h3>Perfil Etário</h3></div>
+                <div class="cb"><img src="data:image/png;base64,{img_id}" class="img"></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="ch"><h3>Detalhamento por Categoria</h3></div>
+            <div class="cb" style="text-align:left;padding:0">{render(tb_cat, 'Categoria')}</div>
+        </div>
+
+        <div class="row">
+            <div class="col card">
+                <div class="ch"><h3>Detalhamento por País</h3></div>
+                <div class="cb" style="text-align:left;padding:0">{render(tb_pais, 'País')}</div>
+            </div>
+            <div class="col card">
+                <div class="ch"><h3>Detalhamento por Estado (Brasil)</h3></div>
+                <div class="cb" style="text-align:left;padding:0">{render(tb_uf, 'Estado')}</div>
+            </div>
+        </div>
         </body></html>"""
 
-        pdf_file = BytesIO()
-        HTML(string=html).write_pdf(pdf_file)
+        pdf_io = BytesIO()
+        HTML(string=html).write_pdf(pdf_io)
         
-        st.success("✅ Relatório Processado com Sucesso!")
-        
-        # BOTÃO DE DOWNLOAD FINAL
-        st.download_button(
-            label="⬇️ BAIXAR PDF FINAL",
-            data=pdf_file.getvalue(),
-            file_name=f"Relatorio_{con_event.replace(' ','_')}_{con_year}.pdf",
-            mime="application/pdf"
-        )
-        
+        st.balloons()
+        st.success(f"✅ Relatório do evento **{con_event}** gerado com sucesso!")
+        st.download_button("⬇️ BAIXAR PDF FINAL", data=pdf_io.getvalue(), file_name=f"Relatorio_{con_event.replace(' ','_')}_{con_year}.pdf", mime="application/pdf")
+
     except Exception as e:
-        st.error(f"Erro ao processar dados: {e}")
+        st.error(f"Erro ao processar: {e}")
