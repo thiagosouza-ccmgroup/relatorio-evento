@@ -8,60 +8,203 @@ from datetime import datetime, timedelta
 import unicodedata
 from weasyprint import HTML
 import warnings
+import os
+import time
+
+# Tenta importar Selenium (pode falhar se não instalado)
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.chrome.service import Service
+    from webdriver_manager.chrome import ChromeDriverManager
+    HAS_SELENIUM = True
+except ImportError:
+    HAS_SELENIUM = False
 
 # Configuração da Página
-st.set_page_config(page_title="Gerador de Relatórios", page_icon="📊")
+st.set_page_config(page_title="Gerador de Relatórios", page_icon="📊", layout="wide")
 warnings.filterwarnings('ignore')
 
-# --- CSS PARA ESTILIZAR O SITE ---
+# --- CSS ---
 st.markdown("""
     <style>
-    .stButton>button {
-        width: 100%;
-        background-color: #28a745;
-        color: white;
-        height: 60px;
-        font-size: 20px;
-    }
+    .stButton>button { width: 100%; height: 50px; font-weight: bold; }
+    .success-btn { background-color: #28a745; color: white; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- TÍTULO ---
 st.title("📊 Gerador de Relatório de Eventos")
-st.markdown("Faça o upload da planilha e gere o PDF automaticamente.")
 
-# --- INPUTS ---
-col1, col2 = st.columns(2)
-with col1:
-    con_event = st.text_input("Nome do Evento", value="SOBED DAYS")
-with col2:
-    con_year = st.text_input("Ano", value="2026")
+# --- MENU LATERAL (OPÇÕES) ---
+st.sidebar.header("Configuração")
+modo_entrada = st.sidebar.radio("Como você quer obter os dados?", ("Fazer Upload do Excel", "Baixar Automaticamente (Robô)"))
 
-# --- UPLOAD ---
-uploaded_file = st.file_uploader("Escolha o arquivo Excel (.xlsx) ou CSV", type=['xlsx', 'csv'])
+# Variáveis globais para o fluxo
+df_final = None
+con_event = ""
+con_year = ""
 
-# --- LÓGICA DE PROCESSAMENTO ---
-if uploaded_file is not None:
-    st.info("Arquivo carregado! Processando...")
+# ==============================================================================
+# MODO 1: ROBÔ AUTOMÁTICO
+# ==============================================================================
+if modo_entrada == "Baixar Automaticamente (Robô)":
+    if not HAS_SELENIUM:
+        st.error("⚠️ As bibliotecas do Selenium não estão instaladas neste ambiente.")
+    else:
+        st.subheader("🤖 Acesso Automático ao Sistema")
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            subdominio = st.text_input("Subdomínio (ex: ccm)", value="ccm")
+            usuario = st.text_input("Usuário do Sistema")
+        with c2:
+            edicao = st.text_input("Edição (ex: dic2025)", value="dic2025")
+            senha = st.text_input("Senha", type="password")
+            
+        con_event = edicao.upper()
+        con_year = datetime.now().year # Padrão
+        
+        if st.button("🚀 INICIAR ROBÔ DE DOWNLOAD"):
+            if not usuario or not senha:
+                st.warning("Preencha usuário e senha!")
+            else:
+                status = st.empty()
+                status.info("⏳ Iniciando navegador invisível...")
+                
+                try:
+                    # Configuração Selenium Headless para Servidor
+                    chrome_options = Options()
+                    chrome_options.add_argument("--headless")
+                    chrome_options.add_argument("--no-sandbox")
+                    chrome_options.add_argument("--disable-dev-shm-usage")
+                    chrome_options.add_argument("--disable-gpu")
+                    
+                    # Define pasta de download temporária
+                    download_dir = os.getcwd()
+                    prefs = {"download.default_directory": download_dir}
+                    chrome_options.add_experimental_option("prefs", prefs)
+                    
+                    # Instala Driver
+                    service = Service(ChromeDriverManager().install())
+                    driver = webdriver.Chrome(service=service, options=chrome_options)
+                    
+                    # 1. Login
+                    status.info("🔑 Realizando login...")
+                    url_login = f"https://{subdominio}.iweventos.com.br/sistema/not/acesso/login"
+                    driver.get(url_login)
+                    
+                    try:
+                        driver.find_element(By.NAME, "login").send_keys(usuario)
+                    except:
+                        driver.find_element(By.ID, "usuario").send_keys(usuario)
+                        
+                    try:
+                        driver.find_element(By.NAME, "senha").send_keys(senha)
+                        driver.find_element(By.NAME, "senha").submit()
+                    except:
+                        driver.find_element(By.ID, "senha").send_keys(senha)
+                        driver.find_element(By.ID, "senha").submit()
+                        
+                    time.sleep(3)
+                    
+                    # 2. Acessar Relatório
+                    status.info(f"📍 Acessando edição {edicao}...")
+                    url_rel = f"https://{subdominio}.iweventos.com.br/sistema/{edicao}/relinscricoesexcel/inscricoes"
+                    driver.get(url_rel)
+                    
+                    if "login" in driver.current_url:
+                        raise Exception("Falha no login. Verifique as credenciais.")
+                        
+                    # 3. Marcar Checkboxes
+                    status.info("☑️ Marcando opções do relatório...")
+                    agrupadores = [
+                        "agrupador_inscricao", "agrupador_dados_pessoais", "agrupador_dados_contato", 
+                        "agrupador_dados_complementares", "agrupador_dados_correspondencia", 
+                        "agrupador_transporte_ida", "agrupador_transporte_volta", 
+                        "agrupador_hospedagem", "agrupador_cobranca"
+                    ]
+                    for classe in agrupadores:
+                        try:
+                            driver.execute_script(f"if(document.getElementsByClassName('{classe}')[0]) document.getElementsByClassName('{classe}')[0].click();")
+                        except: pass
+                        
+                    # 4. Baixar
+                    status.info("⬇️ Gerando Excel...")
+                    driver.execute_script("document.getElementById('btGerar').click();")
+                    
+                    # Espera download
+                    arquivo_baixado = None
+                    for i in range(60):
+                        time.sleep(1)
+                        files = [f for f in os.listdir(download_dir) if f.endswith(('.xlsx', '.xls', '.csv'))]
+                        # Pega o mais recente
+                        if files:
+                            files.sort(key=lambda x: os.path.getmtime(os.path.join(download_dir, x)), reverse=True)
+                            arquivo_baixado = os.path.join(download_dir, files[0])
+                            # Verifica se terminou de baixar (não é .crdownload)
+                            if not arquivo_baixado.endswith('.crdownload'):
+                                break
+                                
+                    driver.quit()
+                    
+                    if arquivo_baixado:
+                        status.success(f"✅ Download concluído: {os.path.basename(arquivo_baixado)}")
+                        # Lê o arquivo para memória
+                        if arquivo_baixado.endswith('.csv'):
+                            try:
+                                df_final = pd.read_csv(arquivo_baixado, sep=',')
+                                if len(df_final.columns) < 5: df_final = pd.read_csv(arquivo_baixado, sep=';')
+                            except:
+                                df_final = pd.read_csv(arquivo_baixado, sep=None, engine='python')
+                        else:
+                            df_final = pd.read_excel(arquivo_baixado)
+                            
+                        # Limpa arquivo temporário
+                        os.remove(arquivo_baixado)
+                        
+                    else:
+                        st.error("O download não iniciou a tempo.")
+                        
+                except Exception as e:
+                    st.error(f"Erro no Robô: {e}")
+                    if 'driver' in locals(): driver.quit()
 
-    try:
-        # Leitura
+# ==============================================================================
+# MODO 2: UPLOAD MANUAL
+# ==============================================================================
+else:
+    c1, c2 = st.columns(2)
+    with c1: con_event = st.text_input("Nome do Evento", value="SOBED DAYS")
+    with c2: con_year = st.text_input("Ano", value="2026")
+    
+    uploaded_file = st.file_uploader("Upload Excel/CSV", type=['xlsx', 'csv'])
+    if uploaded_file:
         if uploaded_file.name.endswith('.csv'):
             try:
-                df = pd.read_csv(uploaded_file, sep=',')
-                if len(df.columns) < 5: df = pd.read_csv(uploaded_file, sep=';')
+                df_final = pd.read_csv(uploaded_file, sep=',')
+                if len(df_final.columns) < 5: df_final = pd.read_csv(uploaded_file, sep=';')
             except:
-                df = pd.read_csv(uploaded_file, sep=None, engine='python')
+                df_final = pd.read_csv(uploaded_file, sep=None, engine='python')
         else:
-            df = pd.read_excel(uploaded_file)
+            df_final = pd.read_excel(uploaded_file)
 
+# ==============================================================================
+# PROCESSAMENTO COMUM (GERA PDF)
+# ==============================================================================
+if df_final is not None:
+    st.divider()
+    st.write("### ⚙️ Gerando Relatório PDF...")
+    
+    try:
+        df = df_final
         # Mapeamento
         df_clean = df.iloc[:, [1, 2, 4, 5, 9, 13, 21, 52, 53]].copy()
         df_clean.columns = ['Nome', 'Categoria', 'Pgto', 'DataPagamento', 'Situacao', 'DataInscricao', 'Nasc', 'UF', 'Pais']
         df_clean = df_clean.dropna(subset=['Nome'])
         df_clean = df_clean[df_clean['Nome'] != ""]
 
-        # Funções Auxiliares (Mesmas do Colab)
+        # Funções Auxiliares
         def normalizar(txt):
             if not isinstance(txt, str): return ""
             nfkd = unicodedata.normalize('NFKD', txt)
@@ -280,13 +423,14 @@ if uploaded_file is not None:
         pdf_file = BytesIO()
         HTML(string=html).write_pdf(pdf_file)
         
-        st.success("✅ Relatório Gerado com Sucesso!")
+        st.balloons()
+        st.success(f"✅ Relatório do evento **{con_event}** gerado!")
         st.download_button(
             label="⬇️ BAIXAR PDF",
             data=pdf_file.getvalue(),
-            file_name=f"Relatorio_{con_event}_{con_year}.pdf",
+            file_name=f"Relatorio_{con_event.replace(' ','_')}_{con_year}.pdf",
             mime="application/pdf"
         )
         
     except Exception as e:
-        st.error(f"Erro ao processar arquivo: {e}")
+        st.error(f"Erro ao processar: {e}")
